@@ -75,10 +75,10 @@ cmake --build build/Debug --target "CMakeFiles/Infantry_01.dir/Bsp/uart/bsp_uart
 - Use targeted rebuilds for quick compile checks, not as a replacement for full firmware validation.
 
 ## Current Build Status
-- `cmake --build --preset Debug` currently fails in `Bsp/uart/bsp_uart.c`.
-- The main hard error is passing `&pData->rxdatas` where HAL expects `uint8_t *`.
-- The current branch also emits several warnings for signedness and unused parameters/variables.
-- Do not assume the repo is build-clean before you start editing.
+- Verified 2026-10-19: `cmake --build --preset Debug` compiles and links `Infantry_01.elf` successfully, including `Bsp/uart/bsp_uart.c`.
+- The earlier note about `&pData->rxdatas` type errors was stale: active call sites already use `pData->rxdatas`; the `&` variants are commented out.
+- Warnings remain and are the baseline, not regressions: signedness comparisons, unused parameters, `-Wtype-limits` dead guards in `DM_MIT_send_ctrl_cmd`, misleading indentation in `M2006_VEL_PID_set_para`.
+- No `-Werror`; do not treat these warnings as newly introduced.
 
 ## Architecture Landmarks
 - `Core/Src/main.c` initializes HAL/peripherals, then starts FreeRTOS.
@@ -88,6 +88,37 @@ cmake --build build/Debug --target "CMakeFiles/Infantry_01.dir/Bsp/uart/bsp_uart
 - Motor abstractions live in `Components/motor/`.
 - Remote-control parsing lives in `Components/remote/`.
 - Auto-aim parsing/control lives in `Application/auto_ctrl.*`.
+
+## 算法联调上下文 (PID/前馈现状)
+
+> 2026-10-19 会话沉淀。目标：算法联调、加入前馈算法。方向已定并落盘执行文档：`docs/前馈联调说明.md`（轮次总表、代码清单、标定步骤、回退开关）。
+> 以下均已读码核实并附 file:line，改控制/前馈代码前可直接引用，无需重读全文件。
+
+### 任务与数据流速记
+- 7 任务创建于 `Core/Src/freertos.c:96`：sensor / motor / gimbal / chassis / shoot / recv_cmd / send_info；共享状态 `robot_ctrl`（`Application/robot_global.h:123`）。
+- 控制链路：任务层(2ms) `set_target` 写目标 → `motor_task`(1ms) `Motor_All_Update()` 跑 PID → CAN 组帧发送（`Components/motor/motor.c:1489` CAN1 / `motor.c:1544` CAN2）。
+
+### PID 全景（全部在 `Components/motor/motor.c`，离散 PID 无 dt 项，按 1ms 周期整定）
+| 电机 | 结构 | 实质 | 关键参数 (行号) |
+|---|---|---|---|
+| M3508 底盘×4 | 单环速度 PID | 纯 P | Kp=10, Ki=0, Kd=0, Out=10000 (motor.c:1386) |
+| M3508 摩擦轮×2 | 单环速度 PID | 纯 P | Kp=20, Ki=0, Out=16384 (motor.c:1423) |
+| M2006 拨弹 | 位置+速度串级 | 外环 PI+死区12清积分；内环 Ki=0.1 | motor.c:780/1398；速度覆盖模式 set_target para_num=2 (motor.c:829) |
+| GM6020 偏航 | 位置-速度串级+前馈通道 | P+速度阻尼外环 / P 内环 | P_Kp=420, P_Kd=1.45, V_Kp=200, Out=25000 (motor.c:1409/1068) |
+| J4310 俯仰 | 达妙 MIT | MCU 无 PID，电机内 PD | kp=25, kd=2, P_MAX=12.5 (motor.c:1372)；`DM_update` 为空 (motor.c:200) |
+
+### 已有前馈点（联调起点）
+- yaw 前馈三级链：`chassis_task.c:481` 写 `robot_ctrl.chassis.yaw_speed` → `gimbal_task.c:337-345` 斜率限幅+一阶滤波（`YAW_FF_*` 宏 `gimbal_task.c:37-44`）→ `gimbal_task.c:364` `set_target(yaw_m, 2, yaw_out, ff)` → `motor.c:1114` `v_des * V_Only_Kp(300)` 叠加到电压输出。
+- 任务层隐式外环：`gimbal_task.c:332-367` IMU 误差 + 小积分(0.55, 限幅0.1) + pitch 位置映射；底盘跟随纯 P=0.5（`chassis_task.c:466`）。
+
+### 改前馈时的已知风险/观察
+- 前馈饱和：`YAW_FF_LIMIT=200 × V_Only_Kp=300 = 60000`，远超 `Out_Max=25000`，快速自转时前馈+P 项会顶满限幅。
+- 电机层积分无 dt、无积分分离；失能时清积分清输出（M3508 motor.c:517、GM6020 motor.c:1077 失能期间持续同步 p_des 防甩头）。
+- M3508/M2006 `_last_error` 为 int16，极端跳变可截断。
+- 视觉链路语义：`recv_cmd_task.c:13` 250ms 软衰减 / 500ms 硬超时；自瞄丢目标 1s 保持后进入扫描（`gimbal_task.c:26` 附近宏）。
+
+### 待办
+- 算法联调：执行文档 `docs/前馈联调说明.md` 已落盘。Round 0 已完成（2026-10-19）：`DM_MIT_get_status` VEL/T 反归一化修复、`robot_global.h` 单位注释修正、全量 Debug 构建验证绿。下一步 Round 1a：俯仰重力矩前馈（`motor.c` 4 处，代码见执行文档 §2，待审阅确认后合入）。
 
 ## Generated-Code Boundaries
 - Treat `Core/`, `USB_DEVICE/`, and `cmake/stm32cubemx/` as generated or generator-adjacent.

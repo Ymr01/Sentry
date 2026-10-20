@@ -1,3 +1,13 @@
+// 此文件是不断地把 BMI088 的原始数据，解算成这些角度和角速度，写进去
+// struct {
+//     fp32 q[4];       // 当前姿态四元数 [w,x,y,z]
+//     fp32 yaw;        // 当前航向角 (度)
+//     fp32 pitch;      // 当前俯仰角 (度)
+//     fp32 roll;       // 当前横滚角 (度)
+//     fp32 yaw_v;      // 航向角速度 (度/s)
+//     fp32 pitch_v;    // 俯仰角速度 (度/s)
+// } gimbal;
+
 #include "sensor_task.h"
 #include "../Components/BMI088/BMI088driver.h"
 #include "../Application/robot_global.h"
@@ -19,7 +29,7 @@ void sensor_task_func(void const * argument) {
 
     // 1. 硬件初始化
     while (BMI088_init() != 0) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(10));//10ms后再试一次
     }
 
     // 2. 静态零偏校准 (核心逻辑：抑制0漂)
@@ -36,10 +46,10 @@ void sensor_task_func(void const * argument) {
     gyro_bias[2] /= CALI_SAMPLES;
 
     // 3. 标记传感器就绪
-    robot_ctrl.monitor.sensor_ready = 1;
+    robot_ctrl.monitor.sensor_ready = 1;//其他任务都在等这个
 
     while (1) {
-        // 4. 读取传感器数据并减去零偏 (实现0漂抑制)
+        // 4.每次读取传感器数据都要减去零偏 (实现0漂抑制)
         BMI088_read(gyro, accel, &temp);
         gyro[0] -= gyro_bias[0];
         gyro[1] -= gyro_bias[1];

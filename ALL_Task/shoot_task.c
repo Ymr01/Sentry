@@ -26,13 +26,14 @@
 #define STIR_TARGET_HOLD_TOL    800
 
 /* Trigger plate step config (output side). */
-#define STIR_ENCODER_CPR           8192.0f
-#define STIR_GEAR_RATIO            36.0f   /* 减速箱 36:1 */
-#define STIR_BELT_RATIO            2.8f    /* 同步带比，可在线调整 */
-#define STIR_TOTAL_RATIO           (STIR_GEAR_RATIO * STIR_BELT_RATIO)
-#define STIR_STEP_OUTPUT_DEG       36.0f   /* 单击拨弹角度（输出侧�� */
+#define STIR_ENCODER_CPR           8192.0f //每转计数
+#define STIR_GEAR_RATIO            36.0f   /* 减速箱 36:1 （电机转子转36圈 输出轴转1圈）*/
+#define STIR_BELT_RATIO            2.8f    /* 同步带比，可在线调整 m2006转2.8圈->拨弹盘转一圈*/
+#define STIR_TOTAL_RATIO           (STIR_GEAR_RATIO * STIR_BELT_RATIO)//转子转 100.8 圈 → 拨弹盘转 1 圈
+#define STIR_STEP_OUTPUT_DEG       36.0f   /* 单击拨弹角度（打出一个子弹拨弹盘转动少度）*/
 #define STIR_STEP_DIR              (-1.0f) /* 方向不对改为 +1.0f */
 
+//STIR_STEP_TICKS = -82575；打一发目标位置-82575=拨弹盘转36°
 #define STIR_STEP_TICKS ((int32_t)(STIR_STEP_DIR * STIR_ENCODER_CPR * STIR_TOTAL_RATIO * (STIR_STEP_OUTPUT_DEG / 360.0f)))
 
 /* 卡弹堵转自救参数（按实机可继续微调） */
@@ -43,9 +44,9 @@
 #define STIR_JAM_COOLDOWN_TICKS   40U   /* 80ms @500Hz */
 
 typedef enum {
-	STIR_JAM_IDLE = 0,
-	STIR_JAM_RECOVER,
-	STIR_JAM_COOLDOWN,
+	STIR_JAM_IDLE = 0,//正常拨弹
+	STIR_JAM_RECOVER,//反转逃逸
+	STIR_JAM_COOLDOWN,//反转完冷却
 } stir_jam_state_e;
 
 void shoot_task_func(void const * argument)
@@ -54,21 +55,23 @@ void shoot_task_func(void const * argument)
 	struct motor_device *shoot_r = motor_get_device("M3508_SHOOT_R");
 	struct motor_device *stir_m  = motor_get_device("M2006_TRIGGER");
 
-	int32_t stir_pos_sum = 0;
-	int32_t stir_target_sum = 0;
-	uint8_t stir_target_inited = 0U;
-	uint8_t last_fire_btn = 0U;
-	uint8_t last_auto_shoot_cmd = 0U;
-	uint16_t fire_hold_ticks = 0U;
-	uint16_t fire_burst_ticks = 0U;
-	uint8_t auto_fire_active = 0U;
-	uint8_t auto_burst_pending = 0U;
-	uint16_t auto_burst_ticks = 0U;
-	uint8_t stir_jam_latched = 0U;
-	uint16_t stir_jam_detect_ticks = 0U;
-	uint16_t stir_jam_recover_ticks = 0U;
-	uint16_t stir_jam_cooldown_ticks = 0U;
-	stir_jam_state_e stir_jam_state = STIR_JAM_IDLE;
+	int32_t stir_pos_sum = 0;           // 拨弹当前位置（多圈）
+	int32_t stir_target_sum = 0;        // 拨弹目标位置（多圈）
+	uint8_t stir_target_inited = 0U;    // 首次同步标志
+
+	uint8_t last_fire_btn = 0U;         // 上一帧开火键状态（上升沿检测）
+	uint16_t fire_hold_ticks = 0U;      // 长按计数
+	uint16_t fire_burst_ticks = 0U;     // 连发间隔计数
+	uint8_t auto_fire_active = 0U;      // 是否已进入连发模式
+
+	uint8_t last_auto_shoot_cmd = 0U;   // 自瞄 shoot 上升沿
+	uint8_t auto_burst_pending = 0U;    // 待发射子弹数
+	uint16_t auto_burst_ticks = 0U;     // 自瞄连发间隔
+	uint8_t stir_jam_latched = 0U;      // 堵转锁定标志
+	uint16_t stir_jam_detect_ticks = 0U;    // 堵转检测计数
+	uint16_t stir_jam_recover_ticks = 0U;   // 反转持续计数
+	uint16_t stir_jam_cooldown_ticks = 0U;  // 冷却计数
+	stir_jam_state_e stir_jam_state = STIR_JAM_IDLE;  // 状态机-正常拨弹
 	(void)argument;
 
 	for (;;)
@@ -134,12 +137,14 @@ void shoot_task_func(void const * argument)
 			stir_jam_state = STIR_JAM_IDLE;
 		}
 
+		/*手动长按连发*/
 		if (robot_ctrl.gimbal_mode == GIMBAL_REMOTE)
 		{
 			fire_cmd = (robot_ctrl.rc->vt13.mouse_vt13.press_l || robot_ctrl.rc->vt13.rc_vt13.trigger)
 					 && (robot_ctrl.shoot_mode == SHOOT_READY)
 					 && (feed_block == 0U);
 		}
+		//自瞄三连发
 		else if (robot_ctrl.gimbal_mode == GIMBAL_AUTO)
 		{
 			/* Auto-aim: shoot上升沿触发三连发，不跟随高电平持续发射。 */
@@ -149,7 +154,7 @@ void shoot_task_func(void const * argument)
 
 			if (auto_shoot_cmd && (last_auto_shoot_cmd == 0U))
 			{
-				auto_burst_pending = AUTO_BURST_SHOTS;
+				auto_burst_pending = AUTO_BURST_SHOTS;//装填三发
 				auto_burst_ticks = 0U;
 			}
 			last_auto_shoot_cmd = auto_shoot_cmd;
@@ -267,9 +272,9 @@ void shoot_task_func(void const * argument)
 					fire_cmd = 1U;
 					if (auto_burst_ticks == 0U)
 					{
-						stir_target_sum += STIR_STEP_TICKS;
-						auto_burst_pending--;
-						auto_burst_ticks = AUTO_BURST_TICKS;
+						stir_target_sum += STIR_STEP_TICKS;//打一发
+						auto_burst_pending--;//剩余-1
+						auto_burst_ticks = AUTO_BURST_TICKS;//重置间隔计数
 					}
 					else
 					{
@@ -304,6 +309,7 @@ void shoot_task_func(void const * argument)
 					auto_fire_active = 0U;
 				}
 
+				//按住累计时间
 				if (fire_cmd)
 				{
 					if (fire_hold_ticks < FIRE_HOLD_START_TICKS)
@@ -312,9 +318,10 @@ void shoot_task_func(void const * argument)
 					}
 					else
 					{
-						auto_fire_active = 1U;
+						auto_fire_active = 1U;//超过180ms->连发
 					}
 
+					//连发模式，30ms一发
 					if (auto_fire_active)
 					{
 						if (fire_burst_ticks >= FIRE_BURST_TICKS)

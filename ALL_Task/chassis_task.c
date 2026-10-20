@@ -14,12 +14,12 @@
 #define GIMBAL_PIT_SENS         0.002f
 #define MOUSE_YAW_SENS          0.0004f  // 鼠标横向灵敏度
 #define MOUSE_PIT_SENS          0.0002f  // 鼠标纵向灵敏度
-#define FOLLOW_P_GAIN           0.5f
+#define FOLLOW_P_GAIN           0.5f     //底盘跟随云台的比例增益 这个灵敏度不太高
 #define RC_DEADZONE             10
-#define YAW_CENTER_OFFSET       1.9f//-1.7f（步兵） //1.9f（哨兵）
+#define YAW_CENTER_OFFSET       1.9f//-1.7f（步兵） //1.9f（哨兵）云台yaw相对底盘的机械中位偏置
 
 // 底盘几何参数配置
-#define MOTOR_RPM_TO_VECTOR     3000.0f
+#define MOTOR_RPM_TO_VECTOR     3000.0f  //归一化速度
 #define CHASSIS_MAX_RAD         60.0f
 
 // 三档速度配置（可按实车手感直接调参）
@@ -37,7 +37,7 @@
 #define QE_ACTIVE_THRESHOLD     0.01f     // Q/E有效输入阈值
 
 // 底盘渐加速参数（单位：归一化速度/秒）
-#define CHASSIS_VX_ACCEL_UP      2.2f
+#define CHASSIS_VX_ACCEL_UP      2.2f   //每秒增加2.2的归一化速度
 #define CHASSIS_VX_ACCEL_DOWN    4.2f
 #define CHASSIS_VY_ACCEL_UP      2.2f
 #define CHASSIS_VY_ACCEL_DOWN    4.2f
@@ -51,12 +51,12 @@
 #define GAME_TOTAL_DURATION_S      300U
 
 /* --- 静态控制变量 --- */
-static float world_yaw_target = 0.0f;
-static float world_pit_target = 0.0f;
+// static float world_yaw_target = 0.0f;
+// static float world_pit_target = 0.0f;
+// static uint32_t last_rc_tick = 0;
+
 static float vx_ramp = 0.0f, vy_ramp = 0.0f;
 static float vw_ramp = 0.0f;
-
-static uint32_t last_rc_tick = 0;
 
 // 扩展：新增Q/E相关状态变量，和拨轮统一管理
 static uint8_t last_wheel_active = 0;    // 上一帧拨轮是否激活
@@ -73,6 +73,7 @@ static uint8_t last_custom_r_pressed = 0;// 上一帧 custom_r 状态（路径�
 
 static struct uart_device *log_uart = NULL;
 
+//日志 调试时使用
 #define LOG_PRINT(...) do { if (log_uart != NULL) { log_uart->Print(log_uart, __VA_ARGS__); } } while (0)
 #define CHASSIS_VERBOSE_LOG          0U
 #define CHASSIS_STATE_LOG_PERIOD_MS  30U
@@ -149,14 +150,16 @@ void chassis_task_func(void const * argument) {
     }
     struct motor_device *yaw_m = motor_get_device("GM6020_YAW");
 
-    const RC_ctrl_t *rc = robot_ctrl.rc;
-    static uint8_t last_pause_cmd = 0;
-    static uint8_t last_enable_cmd = 0;
-    static uint8_t last_disable_cmd = 0;
-    float wheel_targets[4] = {0};
-    uint8_t last_remote_online = 0xFFU;
-    uint32_t last_diag_tick = 0U;
-    uint32_t last_ctrl_tick = 0U;
+    const RC_ctrl_t *rc = robot_ctrl.rc;  //省一级访问，省cpu
+
+    static uint8_t last_pause_cmd = 0;   //pause键上一帧
+    static uint8_t last_enable_cmd = 0;  //C键上一帧
+    static uint8_t last_disable_cmd = 0; //X键上一帧
+
+    float wheel_targets[4] = {0};        //四个轮子目标速度
+    uint8_t last_remote_online = 0xFFU;  //遥控器在线上一帧
+    uint32_t last_diag_tick = 0U;        //上次诊断日志时刻
+    uint32_t last_ctrl_tick = 0U;        //上次控制循环时刻
 
     /******************************************************************************************************************/
     // 系统启动保护
@@ -167,16 +170,19 @@ void chassis_task_func(void const * argument) {
     // 主循环
     while (1) {
         uint32_t current_tick = osKernelSysTick();
+        //对端在发送比赛数据&&比赛进行中
         uint8_t game_started_now = (robot_ctrl.game_info.online_301 &&
                                     (robot_ctrl.game_info.game_progress == GAME_PROGRESS_BATTLE)) ? 1U : 0U;
 
         Chassis_Update_Status_LED();
+
+        //计算dt_s
         float dt_s = 0.002f;
         if (last_ctrl_tick != 0U) {
             uint32_t dt_ms = (uint32_t)(current_tick - last_ctrl_tick);
             if (dt_ms == 0U) dt_ms = 1U;
             if (dt_ms > 20U) dt_ms = 20U;
-            dt_s = (float)dt_ms * 0.001f;
+            dt_s = (float)dt_ms * 0.001f;    //单位转成秒
         }
         last_ctrl_tick = current_tick;
 
@@ -222,6 +228,8 @@ void chassis_task_func(void const * argument) {
             uint8_t pause_cmd = rc->vt13.rc_vt13.pause;
             uint8_t enable_cmd = KEY_PRESSED(rc->vt13.key_vt13.v, KEY_VT13_C);
             uint8_t disable_cmd = KEY_PRESSED(rc->vt13.key_vt13.v, KEY_VT13_X);
+
+            //三个上升沿（边缘触发）————上一帧没按但本帧按下
             uint8_t pause_trigger = (pause_cmd && !last_pause_cmd);
             uint8_t enable_trigger = (enable_cmd && !last_enable_cmd);
             uint8_t disable_trigger = (disable_cmd && !last_disable_cmd);
@@ -234,8 +242,9 @@ void chassis_task_func(void const * argument) {
             } else if (enable_trigger) {
                 robot_ctrl.monitor.system_enabled = 1;
             } else if (pause_trigger) {
-                robot_ctrl.monitor.system_enabled ^= 1U;
+                robot_ctrl.monitor.system_enabled ^= 1U;//0->1,1->0；符合暂停的功能
             }
+
 
             if (robot_ctrl.monitor.system_enabled != prev_system_enabled) {
                 LOG_VERBOSE_PRINT("[CHS][SYS_EN] t=%lu %u->%u trig(x/c/p)=%u/%u/%u key=0x%04X pause=%u\r\n",
@@ -248,7 +257,7 @@ void chassis_task_func(void const * argument) {
                                   (unsigned int)rc->vt13.key_vt13.v,
                                   (unsigned int)pause_cmd);
             }
-
+            //失能清状态：当前失能，但上一帧使能（下降沿）
             if (!robot_ctrl.monitor.system_enabled && prev_system_enabled) {
                 yaw_align_enable = 0;
                 last_wheel_active = 0;
@@ -311,7 +320,7 @@ void chassis_task_func(void const * argument) {
         /**************************************************************************************************************/
 
         if (robot_ctrl.monitor.remote_online) {
-            if (robot_ctrl.chassis_mode != CHASSIS_RELAX) {
+            if (robot_ctrl.chassis_mode != CHASSIS_RELAX) {//新加入工作模式留空间
                 if (robot_ctrl.chassis_mode == CHASSIS_FOLLOW) {
                     // --- A. 输入源融合 (遥控器摇杆 + 键盘) ---
                     float vx_rc = (abs(rc->vt13.rc_vt13.ch[0]) > RC_DEADZONE) ? ((float)rc->vt13.rc_vt13.ch[0] / 660.0f) : 0.0f;
@@ -370,7 +379,7 @@ void chassis_task_func(void const * argument) {
                     if (left_rotate_toggle) vw_kb = -speed_ratio;
                     else if (right_rotate_toggle) vw_kb = speed_ratio;
 
-
+                    //视觉规划使能：打开custom_r路径规划 && 对端发送比赛数据 && 比赛进行中
                     uint8_t upper_ctrl_enabled = (robot_ctrl.monitor.plan_enabled &&
                                                   robot_ctrl.game_info.online_301 &&
                                                   (robot_ctrl.game_info.game_progress == GAME_PROGRESS_BATTLE)) ? 1U : 0U;
@@ -402,8 +411,8 @@ void chassis_task_func(void const * argument) {
                     float total_vy = vy_rc + vy_kb + vx_plan;
 
                     // --- B. 各向同性限速 ---
-                    float v_norm = sqrtf(total_vx * total_vx + total_vy * total_vy);
-                    if (v_norm > speed_ratio) {
+                    float v_norm = sqrtf(total_vx * total_vx + total_vy * total_vy);//计算模长
+                    if (v_norm > speed_ratio) {//等比缩放：场景：（遥控器上下推满，键盘左右推满），各个方向速度相同
                         total_vx = total_vx / v_norm * speed_ratio;
                         total_vy = total_vy / v_norm * speed_ratio;
                     }
@@ -414,12 +423,13 @@ void chassis_task_func(void const * argument) {
 
                     // --- C. 跟随与旋转逻辑（扩展：Q/E+拨轮统一回正）---
                     float yaw_m_pos;
-                    yaw_m->get_status(yaw_m, "POS", &yaw_m_pos);
-                    float angle_error = Rad_Format(yaw_m_pos - YAW_CENTER_OFFSET);
+                    yaw_m->get_status(yaw_m, "POS", &yaw_m_pos);      //读取云台机械角
+                    float angle_error = Rad_Format(yaw_m_pos - YAW_CENTER_OFFSET);//算相对中位的偏角
 
                     // 步骤1：判断当前拨轮、Q/E是否处于激活状态
                     uint8_t current_wheel_active = (fabsf(vw_rc) > WHEEL_ACTIVE_THRESHOLD) ? 1 : 0;
                     uint8_t current_qe_active = (fabsf(vw_kb) > QE_ACTIVE_THRESHOLD) ? 1 : 0;
+
                     // 合并手动输入状态（拨轮或Q/E有一个激活，就认为是手动控制阶段）
                     uint8_t current_manual_active = current_wheel_active || current_qe_active;
 

@@ -7,15 +7,15 @@ static fp32 gyro_sen = BMI088_GYRO_2000_SEN;
 
 /* --- 内部 SPI 读写封装 --- */
 static void accel_write_single_reg(uint8_t reg, uint8_t data) {
-    BMI088_ACCEL_NS_L();
-    BMI088_read_write_byte(reg);
-    BMI088_read_write_byte(data);
-    BMI088_ACCEL_NS_H();
+    BMI088_ACCEL_NS_L();//片选拉低
+    BMI088_read_write_byte(reg);//HAL_SPI_TransmitReceive，同时收发一个字节（SPI 全双工）。发的时候收到的内容忽略
+    BMI088_read_write_byte(data);//发数据
+    BMI088_ACCEL_NS_H();//片选拉高
 }
 
 static void accel_read_muli_reg(uint8_t reg, uint8_t *buf, uint8_t len) {
     BMI088_ACCEL_NS_L();
-    BMI088_read_write_byte(reg | 0x80); // 读命令
+    BMI088_read_write_byte(reg | 0x80); // 读芯片命令
     BMI088_read_write_byte(0x55);       // BMI088 加速度计读取第一个字节为 dummy byte
     while (len--) {
         *buf++ = BMI088_read_write_byte(0x55);
@@ -71,19 +71,19 @@ void BMI088_read(fp32 gyro[3], fp32 accel[3], fp32 *temperate) {
 
     // 读取加速度
     accel_read_muli_reg(BMI088_ACCEL_XOUT_L, buf, 6);
-    accel[0] = ((int16_t)((buf[1] << 8) | buf[0])) * accel_sen;
-    accel[1] = ((int16_t)((buf[3] << 8) | buf[2])) * accel_sen;
-    accel[2] = ((int16_t)((buf[5] << 8) | buf[4])) * accel_sen;
+    accel[0] = ((int16_t)((buf[1] << 8) | buf[0])) * accel_sen;//x
+    accel[1] = ((int16_t)((buf[3] << 8) | buf[2])) * accel_sen;//y
+    accel[2] = ((int16_t)((buf[5] << 8) | buf[4])) * accel_sen;//z
 
     // 读取陀螺仪
     gyro_read_muli_reg(BMI088_GYRO_X_L, buf, 6);
-    gyro[0] = ((int16_t)((buf[1] << 8) | buf[0])) * gyro_sen;
-    gyro[1] = ((int16_t)((buf[3] << 8) | buf[2])) * gyro_sen;
-    gyro[2] = ((int16_t)((buf[5] << 8) | buf[4])) * gyro_sen;
+    gyro[0] = ((int16_t)((buf[1] << 8) | buf[0])) * gyro_sen;//x
+    gyro[1] = ((int16_t)((buf[3] << 8) | buf[2])) * gyro_sen;//y
+    gyro[2] = ((int16_t)((buf[5] << 8) | buf[4])) * gyro_sen;//z
 
     // 读取温度
     accel_read_muli_reg(BMI088_TEMP_M, buf, 2);
     raw_data = (int16_t)((buf[0] << 3) | (buf[1] >> 5));
     if (raw_data > 1023) raw_data -= 2048;
-    *temperate = raw_data * 0.125f + 23.0f;
+    *temperate = raw_data * 0.125f + 23.0f;// °C
 }

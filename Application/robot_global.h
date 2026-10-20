@@ -81,11 +81,11 @@ typedef struct {
     // 2. 云台姿态反馈数据 (由 Sensor Task 更新)
     struct {
         fp32 q[4];       // 当前姿态四元数 [w,x,y,z]
-        fp32 yaw;        // 当前航向角 (度)
-        fp32 pitch;      // 当前俯仰角 (度)
-        fp32 roll;       // 当前横滚角 (度)
-        fp32 yaw_v;      // 航向角速度 (度/s)
-        fp32 pitch_v;    // 俯仰角速度 (度/s)
+        fp32 yaw;        // 当前航向角 (弧度)
+        fp32 pitch;      // 当前俯仰角 (弧度)
+        fp32 roll;       // 当前横滚角 (弧度)
+        fp32 yaw_v;      // 航向角速度 (rad/s，BMI088 SEN 已含 deg→rad)
+        fp32 pitch_v;    // 俯仰角速度 (rad/s)
     } gimbal;
 
     // 3. 底盘运动状态 (由 Chassis Task 更新)

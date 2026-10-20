@@ -23,7 +23,7 @@ static void SyncM3508State(motor_runtime_state_t *dst, struct motor_device *m, u
     dst->vel = vel;
     dst->current = current;
     dst->temp = temp;
-    dst->last_rx_tick = m->last_rx_tick;
+    dst->last_rx_tick = m->last_rx_tick;//电机最后一次收到反馈帧的tick
 
     dt = now - m->last_rx_tick;
     dst->online = (m->last_rx_tick != 0U && dt <= MOTOR_OFFLINE_TIMEOUT_MS) ? 1U : 0U;

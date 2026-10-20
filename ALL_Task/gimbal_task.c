@@ -39,7 +39,7 @@
 #define YAW_DAMP_K              0.000f  // 角速度阻尼先关闭，避免持续自转时引入方向相关静差
 #define YAW_FF_ALPHA            0.04f   // 前馈一阶滤波系数（降低起步冲击）
 #define YAW_FF_LIMIT            200.0f  // 前馈限幅，避免瞬态注入过大
-#define YAW_FF_GAIN             2.0f   // 前馈比例系数（稳���偏差交给微积分补偿）
+#define YAW_FF_GAIN             2.0f   // 前馈比例系数（稳态偏差交给微积分补偿）
 #define YAW_FF_SIGN             1.0f    // 前馈方向（若仍反向偏差，改为 -1.0f）
 #define YAW_FF_STEP_MAX         1.6f    // 前馈每周期最大变化量，抑制起步过头
 
@@ -103,7 +103,9 @@ void gimbal_task_func(void const * argument) {
     /**************************************** 【系统上电启动保护】 ****************************************/
     // 等待传感器就绪：陀螺仪/加速度计等传感器未就绪前，云台不动作，防止失控
     while (robot_ctrl.monitor.sensor_ready == 0) { osDelay(10); }
-    osDelay(1000);  // 上电延时1s，等待所有外设/电机/传感器稳定，硬件防冲击
+
+    // 上电延时1s，等待所有外设/电机/传感器稳定，硬件防冲击
+    osDelay(1000);
 
     /**************************************** 【云台任务主循环 - 死循环永不退出】 ****************************************/
     while (1) {
@@ -128,16 +130,15 @@ void gimbal_task_func(void const * argument) {
         else {
             robot_ctrl.monitor.remote_online = 1;  // 置位遥控器在线标志位
 
-            /********************* 发射模式仲裁：S强制起转，C强制停转，N听键盘 *********************/
-            uint8_t shoot_on_cmd = KEY_PRESSED(robot_ctrl.rc->vt13.key_vt13.v, KEY_VT13_F);
-            uint8_t shoot_off_cmd = KEY_PRESSED(robot_ctrl.rc->vt13.key_vt13.v, KEY_VT13_B);
-            uint8_t shoot_on_trigger = (shoot_on_cmd && !last_shoot_on_toggle);
+            uint8_t shoot_on_cmd = KEY_PRESSED(robot_ctrl.rc->vt13.key_vt13.v, KEY_VT13_F); //F键
+            uint8_t shoot_off_cmd = KEY_PRESSED(robot_ctrl.rc->vt13.key_vt13.v, KEY_VT13_B); //B键
+            uint8_t shoot_on_trigger = (shoot_on_cmd && !last_shoot_on_toggle);//本帧按下且上一帧没按
             uint8_t shoot_off_trigger = (shoot_off_cmd && !last_shoot_off_toggle);
             uint8_t sw = robot_ctrl.rc->vt13.rc_vt13.sw;
 
-            if (sw == RC_SW_S_VT13) {
+            if (sw == RC_SW_S_VT13) {  //s档
                 robot_ctrl.shoot_mode = SHOOT_READY;
-            } else if (sw == RC_SW_C_VT13) {
+            } else if (sw == RC_SW_C_VT13) {  //C档
                 robot_ctrl.shoot_mode = SHOOT_STOP;
             } else { /* N档：由键盘控制 */
                 if (shoot_on_trigger) {
@@ -148,6 +149,7 @@ void gimbal_task_func(void const * argument) {
                 }
             }
 
+            //每帧末尾更新————为下一帧的上升沿检测做准
             last_shoot_on_toggle = shoot_on_cmd;
             last_shoot_off_toggle = shoot_off_cmd;
 
@@ -157,20 +159,22 @@ void gimbal_task_func(void const * argument) {
             //     last_sw_state = robot_ctrl.rc->vt13.rc_vt13.sw;     // 更新档位上一帧状态，用于防抖
             // }
             /********************* 云台工作模式：读取统一使能状态，避免与底盘各自切换产生不同步 *********************/
+
+
             // 云台模式切换条件：VT13遥控器自定义左按键 或 鼠标右键 按下 (原先为 VT13 G 键)
             uint8_t mode_cmd = (robot_ctrl.rc->vt13.rc_vt13.custom_l) || (robot_ctrl.rc->vt13.mouse_vt13.press_r);
             uint8_t mode_trigger = (mode_cmd && !last_mode_toggle);     // 按键上升沿触发，防抖
 
-            if (!robot_ctrl.monitor.system_enabled) {
+            if (!robot_ctrl.monitor.system_enabled) { //失能
                 robot_ctrl.gimbal_mode = GIMBAL_RELAX;
                 is_initialized = 0;
                 yaw_ff_filtered = 0.0f;
                 yaw_i_term = 0.0f;
             } else {
                 if (robot_ctrl.gimbal_mode == GIMBAL_RELAX) {
-                    robot_ctrl.gimbal_mode = GIMBAL_REMOTE;
-                    is_initialized = 0;
-                    yaw_i_term = 0.0f;
+                    robot_ctrl.gimbal_mode = GIMBAL_REMOTE;//遥控模式
+                    is_initialized = 0;//
+                    yaw_i_term = 0.0f;//清积分
                 }
 
                 // 触发模式切换：手动 ↔ 自瞄 互切，仅在云台使能状态下有效
@@ -186,21 +190,23 @@ void gimbal_task_func(void const * argument) {
             if (robot_ctrl.gimbal_mode != GIMBAL_RELAX) {  // 云台非失能模式 → 使能，进入角度闭环控制
                 // 云台首次使能初始化：将目标角度同步为当前实际角度，防止上电瞬间角度突变导致云台甩动
                 if (is_initialized == 0) {
-                    world_yaw_target = robot_ctrl.gimbal.yaw;
-                    world_pit_target = robot_ctrl.gimbal.pitch;
+                    world_yaw_target = robot_ctrl.gimbal.yaw;//目标 = 当前实际角度
+                    world_pit_target = robot_ctrl.gimbal.pitch;//防止上电猛甩
                     is_initialized = 1;  // 置位初始化完成标志位，仅执行一次
                 }
 
                 /********************* 模式1：云台手动控制【VT13遥控器摇杆+鼠标 复合控制】 *********************/
                 if (robot_ctrl.gimbal_mode == GIMBAL_REMOTE) {
+
                     // VT13遥控器摇杆值处理：死区过滤 + 归一化到[-1,1]区间，消除无效信号
                     float ry = (abs(robot_ctrl.rc->vt13.rc_vt13.ch[2]) > RC_DEADZONE) ? robot_ctrl.rc->vt13.rc_vt13.ch[2] / 660.0f : 0.0f;
                     float rx = (abs(robot_ctrl.rc->vt13.rc_vt13.ch[3]) > RC_DEADZONE) ? robot_ctrl.rc->vt13.rc_vt13.ch[3] / 660.0f : 0.0f;
+
                     // VT13鼠标值处理：直接乘以灵敏度系数，转为角度增量
                     float mouse_x = (float)robot_ctrl.rc->vt13.mouse_vt13.x * MOUSE_YAW_SENS;
                     float mouse_y = (float)robot_ctrl.rc->vt13.mouse_vt13.y * MOUSE_PIT_SENS;
 
-                    // 计算云台目标角度：摇杆控制量 + 鼠标控制量 叠加
+                    // 计算云台目标角度：摇杆控制量 + 鼠标控制量 叠加 不设置角度限制
                     world_pit_target -= (ry * RC_PIT_SENS) + mouse_y;
                     world_yaw_target -= (rx * RC_YAW_SENS) + mouse_x;
 
@@ -346,6 +352,7 @@ void gimbal_task_func(void const * argument) {
                     yaw_i_term *= 0.995f;
                 }
 
+                //yaw_out = 电机当前 + 角度误差 + 积分补偿 - 阻尼项
                 float yaw_out = cur_yaw + yaw_err + yaw_i_term - (YAW_DAMP_K * robot_ctrl.gimbal.yaw_v);
                 float pit_out = cur_pit - (world_pit_target - robot_ctrl.gimbal.pitch);
 

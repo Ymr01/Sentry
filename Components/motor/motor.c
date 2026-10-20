@@ -351,19 +351,10 @@ void DM_MIT_get_status(const struct motor_device *motor, const char* which_statu
             *(float *) status_data += d->P_MAX;
         }
     } else if (strcmp(which_status, "VEL") == 0) {
-        *(float *)status_data = (float)d->VEL / 4096.0f * 2 * d->V_MAX;
-        if (*(float *)status_data > 0.0f) {
-            *(float *)status_data -= d->V_MAX;
-        }else if (*(float *)status_data <= 0.0f) {
-            *(float *)status_data += d->V_MAX;
-        }
+        /* VEL/T 均为 12 位有符号（DM_get_measure 已符号扩展）：±2048 → ±满量程，不可再做偏移 */
+        *(float *)status_data = (float)d->VEL / 2048.0f * d->V_MAX;
     } else if (strcmp(which_status, "T") == 0) {
-        *(float *)status_data = (float)d->T / 4096.0f * 2 * d->T_MAX;
-        if (*(float *)status_data > 0.0f) {
-            *(float *)status_data -= d->T_MAX;
-        }else if (*(float *)status_data <= 0.0f) {
-            *(float *)status_data += d->T_MAX;
-        }
+        *(float *)status_data = (float)d->T / 2048.0f * d->T_MAX;
     } else if (strcmp(which_status, "TEMP_MOS") == 0) {
         *(int8_t *)status_data = d->TEMP_MOS;
     } else if (strcmp(which_status, "TEMP_Rotor") == 0) {
@@ -528,13 +519,13 @@ void M3508_VEL_PID_update(struct motor_device *motor) {
 
     // 如果未使能，强制执行安全复位
     if (d->enable_flag == 0) {
-        d->_i_term = 0.0f;
-        d->_current_output = 0;
+        d->_i_term = 0.0f;       //积分清零
+        d->_current_output = 0;  //输出置零
         return;
     }
 
     // 1. 计算误差
-    int16_t error = d->_v_des - d->VEL;
+    int16_t error = d->_v_des - d->VEL;  //速度误差 = 目标速度-实际速度
 
     // 2. 比例项 (P)
     float p_out = d->_kp * (float)error;
