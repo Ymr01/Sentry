@@ -57,6 +57,14 @@ struct DM_MIT_data {
 #define DM_CLEAR_RETRY_MS    50U
 #define DM_ENABLE_RETRY_MS   20U
 
+/* ---- 俯仰前馈（第一轮联调） ---- */
+#define PIT_GRAV_FF_GAIN_NM    1.0f   /* 重力矩前馈增益 (N·m)；0=关闭；符号台架标定 */
+#define PIT_GRAV_FF_OFFSET_RAD 0.0f   /* 重力相位补偿 (rad)，由 IMU pitch 零位决定 */
+#define PIT_V_FF_ALPHA         0.3f   /* 速度前馈一阶滤波系数；0=关闭速度前馈 */
+#define PIT_V_FF_SLEW_RAD_S    3.0f   /* v_des 限幅 (rad/s)，与 kd=2 合计 ≈6 N·m 上限 */
+#define PIT_V_FF_JUMP_RAD      0.02f  /* 目标跳变吸收阈值 (rad) */
+#define PIT_V_FF_GAP_MS        50U    /* 断档判据 (ms) */
+
 static void DM_send_special_cmd(struct motor_device *motor, uint8_t cmd)
 {
     if (motor == NULL || motor->motor_data == NULL || motor->motor_can_handle == NULL) return;
